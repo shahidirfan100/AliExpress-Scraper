@@ -80,7 +80,6 @@ const findProductArray = (obj, depth = 0) => {
     }
 
     if (typeof obj === 'object' && obj !== null) {
-        // Priority keys
         const priorityKeys = ['itemList', 'items', 'products', 'list', 'mods', 'data', 'content'];
         const allKeys = Object.keys(obj);
         const sortedKeys = [...priorityKeys.filter(k => allKeys.includes(k)), ...allKeys.filter(k => !priorityKeys.includes(k))];
@@ -109,13 +108,11 @@ const extractProductsFromJson = (jsonData) => {
         for (const item of itemList) {
             if (!item) continue;
 
-            // Handle nested item structure
             const data = item.item || item;
 
             const productId = String(data.productId || data.itemId || data.id || '');
             if (!productId) continue;
 
-            // Title extraction
             let title = null;
             if (data.title) {
                 title = typeof data.title === 'object' ? (data.title.displayTitle || data.title.seoTitle) : data.title;
@@ -123,7 +120,6 @@ const extractProductsFromJson = (jsonData) => {
             title = title || data.productTitle || data.name || null;
             if (!title) continue;
 
-            // Price extraction
             const price = extractPriceValue(
                 data.prices?.salePrice || data.salePrice || data.price || data.prices?.minPrice
             );
@@ -131,26 +127,20 @@ const extractProductsFromJson = (jsonData) => {
                 data.prices?.originalPrice || data.oriPrice || data.originalPrice
             );
 
-            // Rating & reviews
             const rating = data.evaluation?.starRating || data.starRating || data.averageStar || data.rating || null;
             const reviewsCount = data.evaluation?.totalCount || data.reviewCount || data.reviewsCount || null;
-
-            // Orders
             const orders = parseSoldCount(
                 data.trade?.tradeDesc || data.tradeDesc || data.salesCount || data.soldCount || data.sold
             );
 
-            // Store info
             const storeName = data.store?.storeName || data.storeName || data.shopName || null;
             let storeUrl = data.store?.storeUrl || null;
             if (storeUrl && storeUrl.startsWith('//')) storeUrl = `https:${storeUrl}`;
             if (!storeUrl && data.store?.storeId) storeUrl = `https://www.aliexpress.com/store/${data.store.storeId}`;
 
-            // Image
             let imageUrl = data.image?.imgUrl || data.imageUrl || data.img || data.productImage || null;
             imageUrl = normalizeImageUrl(imageUrl);
 
-            // Product URL
             let productUrl = data.productDetailUrl || null;
             if (productUrl && productUrl.startsWith('//')) productUrl = `https:${productUrl}`;
             if (!productUrl) productUrl = `https://www.aliexpress.com/item/${productId}.html`;
@@ -235,9 +225,9 @@ const crawler = new PlaywrightCrawler({
         maxPoolSize: 5,
         sessionOptions: { maxUsageCount: 3 },
     },
-    maxConcurrency: 2, // Lower concurrency for cost
-    requestHandlerTimeoutSecs: 90,
-    navigationTimeoutSecs: 45,
+    maxConcurrency: 2,
+    requestHandlerTimeoutSecs: 120,
+    navigationTimeoutSecs: 90, // Increased timeout
     browserPoolOptions: {
         useFingerprints: true,
         fingerprintOptions: {
@@ -249,17 +239,24 @@ const crawler = new PlaywrightCrawler({
         },
     },
     preNavigationHooks: [
-        async ({ page }) => {
-            // Block heavy resources to reduce cost
+        async ({ page, request }) => {
+            // Set extra headers
+            await page.setExtraHTTPHeaders({
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            });
+
+            // Only block tracking/ads - NOT stylesheets or images (needed for page load)
             await page.route('**/*', (route) => {
-                const type = route.request().resourceType();
                 const url = route.request().url();
 
-                // Block images, fonts, media, and tracking
-                if (['image', 'font', 'media', 'stylesheet'].includes(type) ||
-                    url.includes('google') || url.includes('facebook') ||
-                    url.includes('analytics') || url.includes('doubleclick') ||
-                    url.includes('.png') || url.includes('.jpg') || url.includes('.gif')) {
+                // Only block tracking and ads
+                if (url.includes('google-analytics') ||
+                    url.includes('googletagmanager') ||
+                    url.includes('facebook.com') ||
+                    url.includes('doubleclick') ||
+                    url.includes('hotjar') ||
+                    url.includes('clarity.ms')) {
                     return route.abort();
                 }
                 return route.continue();
@@ -268,6 +265,7 @@ const crawler = new PlaywrightCrawler({
             // Stealth overrides
             await page.addInitScript(() => {
                 Object.defineProperty(navigator, 'webdriver', { get: () => false });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
             });
         },
     ],
@@ -275,17 +273,22 @@ const crawler = new PlaywrightCrawler({
         const pageNo = request.userData?.pageNo || 1;
         log.info(`Processing page ${pageNo}: ${request.url}`);
 
-        // Wait for network to settle (minimal wait)
+        // Wait for page to be ready
         await page.waitForLoadState('domcontentloaded');
-        await page.waitForTimeout(3000);
+
+        // Give time for JavaScript to execute
+        await page.waitForTimeout(5000);
 
         // Get page content for JSON extraction
         const htmlContent = await page.content();
         log.info(`Page loaded: ${htmlContent.length} bytes`);
 
         // Check for blocking
-        if (htmlContent.length < 10000 || htmlContent.includes('captcha') || htmlContent.includes('punish')) {
-            log.warning(`Possible blocking detected. HTML length: ${htmlContent.length}`);
+        if (htmlContent.length < 5000 ||
+            htmlContent.includes('/_____tmd_____/punish') ||
+            htmlContent.includes('x5sec') ||
+            htmlContent.includes('robot check')) {
+            log.warning(`Blocking detected. HTML length: ${htmlContent.length}`);
             throw new Error('Blocked - will retry with new session');
         }
 
@@ -353,18 +356,24 @@ const crawler = new PlaywrightCrawler({
             }
         }
 
-        // 6. Last resort: Extract from inline script data
+        // 6. Look for any embedded product data
         if (products.length === 0) {
-            const scriptMatches = htmlContent.matchAll(/"itemList"\s*:\s*(\[[\s\S]*?\])/g);
-            for (const match of scriptMatches) {
-                try {
-                    const items = JSON.parse(match[1]);
-                    if (items.length > 0) {
-                        log.info(`Found itemList with ${items.length} items`);
-                        products = extractProductsFromJson({ itemList: items });
-                        break;
+            // Try to find itemList in any script
+            const allScripts = htmlContent.match(/<script[^>]*>([\s\S]*?)<\/script>/gi) || [];
+            for (const script of allScripts) {
+                if (script.includes('itemList') || script.includes('productId')) {
+                    const jsonMatch = script.match(/(\{[\s\S]*"itemList"[\s\S]*\})/);
+                    if (jsonMatch) {
+                        try {
+                            const jsonData = JSON.parse(jsonMatch[1]);
+                            products = extractProductsFromJson(jsonData);
+                            if (products.length > 0) {
+                                log.info(`Found products in inline script`);
+                                break;
+                            }
+                        } catch (e) { /* Skip */ }
                     }
-                } catch (e) { /* Skip */ }
+                }
             }
         }
 
