@@ -85,81 +85,161 @@ const extractPrice = (priceData) => {
     return { amount: priceStr, currency };
 };
 
-// Extract products from page JSON data - FIX for actual AliExpress structure
+// Extract products from page JSON data - FIXED with recursive search
 const extractProductsFromJson = (pageData) => {
     const products = [];
 
     try {
-        // AliExpress uses different nested structures
-        let itemList = [];
+        // Helper: Recursively find array of products
+        const findProductArray = (obj, depth = 0, path = '') => {
+            if (depth > 7 || !obj) return null;
 
-        // Try different paths based on actual AliExpress JSON structure
-        if (pageData?.data?.root?.fields?.mods?.itemList?.content) {
-            itemList = pageData.data.root.fields.mods.itemList.content;
-        } else if (pageData?.data?.itemList?.content) {
-            itemList = pageData.data.itemList.content;
-        } else if (pageData?.mods?.itemList?.content) {
-            itemList = pageData.mods.itemList.content;
-        } else if (pageData?.itemList?.content) {
-            itemList = pageData.itemList.content;
-        } else if (Array.isArray(pageData?.content)) {
-            itemList = pageData.content;
-        } else if (Array.isArray(pageData?.data)) {
-            itemList = pageData.data;
+            // Check if this is a product array
+            if (Array.isArray(obj) && obj.length > 0) {
+                // Verify it contains product objects
+                const firstItem = obj[0];
+                if (firstItem && (firstItem.productId || firstItem.itemId || firstItem.id)) {
+                    log.info(`Found product array at depth ${depth}, path: ${path}, count: ${obj.length}`);
+                    return obj;
+                }
+            }
+
+            // Recursively check object properties
+            if (typeof obj === 'object' && obj !== null) {
+                for (const key in obj) {
+                    const result = findProductArray(obj[key], depth + 1, path ? `${path}.${key}` : key);
+                    if (result) return result;
+                }
+            }
+            return null;
+        };
+
+        const itemList = findProductArray(pageData);
+
+        if (!itemList) {
+            log.warning('Could not find product array in JSON structure');
+            log.debug(`JSON keys at root: ${Object.keys(pageData).join(', ')}`);
+            return [];
         }
 
-        log.debug(`Found ${itemList.length} items in JSON`);
+        log.info(`Processing ${itemList.length} items from JSON`);
 
         for (const item of itemList) {
-            // Skip if not a product item
-            if (!item || item.itemType !== 'productV3') continue;
+            // Skip if not a valid product
+            if (!item) continue;
 
-            const priceInfo = extractPrice(item.prices?.salePrice || item.price);
-            const originalPriceInfo = extractPrice(item.prices?.originalPrice || item.oriPrice);
+            // Extract product ID
+            const productId = String(item.productId || item.itemId || item.id || '');
+            if (!productId) continue;
+
+            // Extract title
+            const title =
+                item.title?.displayTitle ||
+                item.title?.seoTitle ||
+                item.title ||
+                item.productTitle ||
+                item.name ||
+                null;
+
+            if (!title) continue; // Skip if no title
+
+            // Extract prices
+            const priceInfo = extractPrice(
+                item.prices?.salePrice ||
+                item.salePrice ||
+                item.price ||
+                item.prices?.minPrice
+            );
+
+            const originalPriceInfo = extractPrice(
+                item.prices?.originalPrice ||
+                item.oriPrice ||
+                item.originalPrice
+            );
+
+            // Extract rating
+            const rating =
+                item.evaluation?.starRating ||
+                item.starRating ||
+                item.averageStar ||
+                item.rating ||
+                null;
+
+            // Extract review count
+            const reviews_count =
+                item.evaluation?.totalCount ||
+                item.evaluation?.reviewCount ||
+                item.reviewCount ||
+                item.reviewsCount ||
+                null;
+
+            // Extract orders/sold count
+            const orders = parseSoldCount(
+                item.trade?.tradeDesc ||
+                item.tradeDesc ||
+                item.salesCount ||
+                item.soldCount ||
+                item.sold
+            );
+
+            // Extract store info
+            const store_name =
+                item.store?.storeName ||
+                item.storeName ||
+                item.shopName ||
+                null;
+
+            const store_url = item.store?.storeUrl
+                ? (item.store.storeUrl.startsWith('//') ? `https:${item.store.storeUrl}` : item.store.storeUrl)
+                : (item.store?.storeId ? `https://www.aliexpress.com/store/${item.store.storeId}` : null);
+
+            // Extract images
+            const image_url = normalizeImageUrl(
+                item.image?.imgUrl ||
+                item.imageUrl ||
+                item.img ||
+                item.productImage
+            );
+
+            // Extract product URL
+            const product_url = item.productDetailUrl
+                ? (item.productDetailUrl.startsWith('//') ? `https:${item.productDetailUrl}` : item.productDetailUrl)
+                : (productId ? `https://www.aliexpress.com/item/${productId}.html` : null);
 
             const product = {
-                product_id: String(item.productId || item.itemId || item.id || ''),
-                title: item.title?.displayTitle || item.title?.seoTitle || item.title || null,
+                product_id: productId,
+                title,
                 price: priceInfo.amount,
                 original_price: originalPriceInfo.amount,
                 currency: priceInfo.currency,
-                rating: item.evaluation?.starRating || item.starRating || item.averageStar || null,
-                reviews_count: item.evaluation?.totalCount || item.evaluation?.reviewCount || item.reviewCount || null,
-                orders: parseSoldCount(item.trade?.tradeDesc) || item.soldCount || parseSoldCount(item.sold) || null,
-                store_name: item.store?.storeName || item.storeName || null,
-                store_url: item.store?.storeUrl ?
-                    (item.store.storeUrl.startsWith('//') ? `https:${item.store.storeUrl}` : item.store.storeUrl) :
-                    (item.store?.storeId ? `https://www.aliexpress.com/store/${item.store.storeId}` : null),
-                image_url: normalizeImageUrl(item.image?.imgUrl || item.imageUrl || item.img),
-                product_url: item.productDetailUrl ?
-                    (item.productDetailUrl.startsWith('//') ? `https:${item.productDetailUrl}` : item.productDetailUrl) :
-                    (item.productId ? `https://www.aliexpress.com/item/${item.productId}.html` : null),
+                rating,
+                reviews_count,
+                orders,
+                store_name,
+                store_url,
+                image_url,
+                product_url,
             };
 
-            if (product.product_id && product.title) {
-                products.push(product);
-            }
+            products.push(product);
         }
+
+        log.info(`Successfully extracted ${products.length} products from JSON`);
     } catch (err) {
         log.error(`JSON extraction error: ${err.message}`);
+        log.debug(`Error stack: ${err.stack}`);
     }
 
     return products;
 };
 
-// Extract products from HTML with improved selectors
+// Extract products from HTML with ACTUAL selectors from browser inspection
 const extractProductsFromHtml = ($) => {
     const products = [];
 
     try {
-        // Find all product cards
-        const cards = $(
-            '[class*="search-card-item"], ' +
-            '[class*="list--gallery--"], ' +
-            '[data-widget="item"], ' +
-            '.product-item, ' +
-            '[class*="CardWrapper"]'
-        ).toArray();
+        // Use actual selector from browser inspection
+        const cards = $('.search-card-item').toArray();
 
         log.debug(`Found ${cards.length} product cards in HTML`);
 
@@ -167,44 +247,68 @@ const extractProductsFromHtml = ($) => {
             const $card = $(card);
 
             // Extract link and ID
-            const $link = $card.find('a[href*="/item/"], a[href*="aliexpress.com"]').first();
-            const productUrl = $link.attr('href') || null;
-            const productIdMatch = productUrl?.match(/\/item\/(\d+)\.html/);
-            const productId = productIdMatch ? productIdMatch[1] : null;
+            const $link = $card.find('a[href*="/item/"]').first();
+            const productUrl = $link.attr('href');
+            if (!productUrl) continue;
 
+            const productIdMatch = productUrl.match(/\/item\/(\d+)\.html/);
+            const productId = productIdMatch ? productIdMatch[1] : null;
             if (!productId) continue;
 
-            // Extract title
+            // Extract title using flexible selector (classes are mangled)
             const title =
-                $card.find('[class*="title"], h1, h2, h3').first().text().trim() ||
+                $card.find('div[class*="titleText"]').first().text().trim() ||
+                $card.find('div[class*="title"]').first().text().trim() ||
+                $card.find('h3, h2, h1').first().text().trim() ||
                 $link.attr('title') ||
                 null;
 
-            // Extract prices with better selectors
+            if (!title) continue;
+
+            // Extract prices using flexible selectors
             const priceText =
-                $card.find('[class*="price--current"], [class*="Price--"], [class*="snow-price"]').first().text().trim() ||
-                $card.find('[class*="price"] span, .price').first().text().trim() ||
+                $card.find('div[class*="price-sale"]').first().text().trim() ||
+                $card.find('div[class*="snow-price"]').first().text().trim() ||
+                $card.find('div[class*="Price"]').first().text().trim() ||
+                $card.find('.price').first().text().trim() ||
                 null;
 
             const originalPriceText =
-                $card.find('[class*="price--original"], [class*="OriginalPrice"]').first().text().trim() ||
-                $card.find('[class*="origin"]').first().text().trim() ||
+                $card.find('div[class*="price-original"]').first().text().trim() ||
+                $card.find('div[class*="OriginalPrice"]').first().text().trim() ||
                 null;
 
-            // Extract rating
-            const ratingText = $card.find('[class*="rating"], [class*="star"]').first().text().trim();
-            const ratingMatch = ratingText?.match(/([\d.]+)/);
+            // Extract rating using aria-label (most reliable)
+            const $ratingEl = $card.find('div[aria-label*="rating"]').first();
+            let rating = null;
+            if ($ratingEl.length) {
+                const ariaLabel = $ratingEl.attr('aria-label');
+                const ratingMatch = ariaLabel?.match(/([\d.]+)/);
+                rating = ratingMatch ? ratingMatch[1] : null;
+            }
+            // Fallback to class-based selectors
+            if (!rating) {
+                const ratingText = $card.find('div[class*="rating"], div[class*="star"]').first().text().trim();
+                const ratingMatch = ratingText?.match(/([\d.]+)/);
+                rating = ratingMatch ? ratingMatch[1] : null;
+            }
 
             // Extract reviews count
-            const reviewText = $card.find('[class*="review"]').first().text().trim();
+            const reviewText = $card.find('span[class*="review"], span[class*="Rating"]').first().text().trim();
             const reviewMatch = reviewText?.match(/([\d,]+)/);
+            const reviews_count = reviewMatch ? parseInt(reviewMatch[1].replace(/,/g, ''), 10) : null;
 
-            // Extract orders/sold
-            const soldText = $card.find('[class*="sold"], [class*="trade"], [class*="order"]').first().text().trim();
+            // Extract orders/sold - look for text like "10,000+ sold"
+            const soldText = $card.text(); // Get all text in card
+            const soldMatch = soldText.match(/([\d,]+)\+?\s*(sold|orders)/i);
+            const orders = soldMatch ? parseInt(soldMatch[1].replace(/,/g, ''), 10) : null;
 
-            // Extract store
-            const storeName = $card.find('[class*="store"], [class*="Shop"]').first().text().trim() || null;
-            const storeUrl = $card.find('a[href*="/store/"]').first().attr('href') || null;
+            // Extract store info
+            const store_name =
+                $card.find('div[class*="store"], div[class*="Shop"], a[class*="store"]').first().text().trim() ||
+                null;
+
+            const store_url = $card.find('a[href*="/store/"]').first().attr('href') || null;
 
             // Extract image
             const imgSrc =
@@ -218,20 +322,20 @@ const extractProductsFromHtml = ($) => {
                 title,
                 price: priceText,
                 original_price: originalPriceText,
-                currency: 'USD',
-                rating: ratingMatch ? ratingMatch[1] : null,
-                reviews_count: reviewMatch ? parseInt(reviewMatch[1].replace(/,/g, ''), 10) : null,
-                orders: parseSoldCount(soldText),
-                store_name: storeName,
-                store_url: storeUrl ? (storeUrl.startsWith('//') ? `https:${storeUrl}` : storeUrl) : null,
+                currency: 'USD', // Default, will be extracted from price text if available
+                rating,
+                reviews_count,
+                orders,
+                store_name,
+                store_url: store_url ? (store_url.startsWith('//') ? `https:${store_url}` : store_url) : null,
                 image_url: imgSrc ? normalizeImageUrl(imgSrc) : null,
-                product_url: productUrl ? (productUrl.startsWith('//') ? `https:${productUrl}` : productUrl) : null,
+                product_url: productUrl.startsWith('//') ? `https:${productUrl}` : productUrl,
             };
 
-            if (product.product_id && product.title) {
-                products.push(product);
-            }
+            products.push(product);
         }
+
+        log.info(`Extracted ${products.length} products from HTML`);
     } catch (err) {
         log.error(`HTML extraction error: ${err.message}`);
     }
