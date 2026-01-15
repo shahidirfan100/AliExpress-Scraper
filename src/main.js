@@ -248,22 +248,42 @@ const extractProductsFromHtml = ($) => {
 
             // Extract link and ID
             const $link = $card.find('a[href*="/item/"]').first();
-            const productUrl = $link.attr('href');
-            if (!productUrl) continue;
+            let productUrl = $link.attr('href');
 
-            const productIdMatch = productUrl.match(/\/item\/(\d+)\.html/);
-            const productId = productIdMatch ? productIdMatch[1] : null;
-            if (!productId) continue;
+            // Try to extract product ID from URL
+            let productId = null;
+            if (productUrl) {
+                const productIdMatch = productUrl.match(/\/item\/(\d+)\.html/);
+                productId = productIdMatch ? productIdMatch[1] : null;
+            }
+
+            // If no ID found from URL, try data attributes
+            if (!productId) {
+                productId = $card.attr('data-product-id') || $card.attr('data-id') || null;
+            }
+
+            // Skip if still no product ID
+            if (!productId) {
+                log.debug('Card found but no product ID extracted');
+                continue;
+            }
+
+            // Construct URL if missing
+            if (!productUrl) {
+                productUrl = `https://www.aliexpress.com/item/${productId}.html`;
+            }
 
             // Extract title using flexible selector (classes are mangled)
             const title =
                 $card.find('div[class*="titleText"]').first().text().trim() ||
                 $card.find('div[class*="title"]').first().text().trim() ||
+                $card.find('div[class*="Title"]').first().text().trim() ||
+                $card.find('a[class*="title"]').first().text().trim() ||
                 $card.find('h3, h2, h1').first().text().trim() ||
+                $card.find('span[class*="title"]').first().text().trim() ||
                 $link.attr('title') ||
-                null;
-
-            if (!title) continue;
+                $link.text().trim() ||
+                `Product ${productId}`; // Fallback to ID if no title found
 
             // Extract prices using flexible selectors
             const priceText =
@@ -404,25 +424,39 @@ const crawler = new CheerioCrawler({
             log.warning(`Possible blocking detected. HTML length: ${htmlContent.length}`);
         }
 
-        // Try to extract from embedded JSON first - IMPROVED EXTRACTION
+        // Try to extract from embedded JSON first - IMPROVED EXTRACTION with DEBUG
         try {
             // Look for window._dida_config_
             let match = htmlContent.match(/window\._dida_config_\s*=\s*({[\s\S]*?});/);
+            let varName = '_dida_config_';
 
             if (!match) {
                 // Look for window.runParams
                 match = htmlContent.match(/window\.runParams\s*=\s*({[\s\S]*?});/);
+                varName = 'runParams';
             }
 
             if (!match) {
                 // Look for __INITIAL_STATE__
                 match = htmlContent.match(/__INITIAL_STATE__\s*=\s*({[\s\S]*?});/);
+                varName = '__INITIAL_STATE__';
             }
 
             if (match) {
                 try {
                     const jsonData = JSON.parse(match[1]);
-                    log.info('Found embedded JSON data, extracting products...');
+                    log.info(`Found embedded JSON data in window.${varName}, extracting products...`);
+
+                    // DEBUG: Log JSON structure
+                    const keys = Object.keys(jsonData);
+                    log.info(`JSON root keys: ${keys.join(', ')}`);
+
+                    // If data key exists, log its keys too
+                    if (jsonData.data) {
+                        const dataKeys = Object.keys(jsonData.data);
+                        log.info(`JSON data keys (first 10): ${dataKeys.slice(0, 10).join(', ')}`);
+                    }
+
                     products = extractProductsFromJson(jsonData);
                     log.info(`Extracted ${products.length} products from JSON`);
                 } catch (parseErr) {
