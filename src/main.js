@@ -1,7 +1,6 @@
-// AliExpress Product Scraper - CheerioCrawler for cost-effective scraping
-import { CheerioCrawler, Dataset } from 'crawlee';
+// AliExpress Product Scraper - Cost-effective JSON extraction via Playwright
+import { PlaywrightCrawler, Dataset } from 'crawlee';
 import { Actor, log } from 'apify';
-import { load as cheerioLoad } from 'cheerio';
 
 // Initialize Apify SDK
 await Actor.init();
@@ -44,322 +43,177 @@ const buildSearchUrl = (kw, page = 1) => {
 const normalizeImageUrl = (url) => {
     if (!url) return null;
     let cleanUrl = url.startsWith('//') ? `https:${url}` : url;
-    cleanUrl = cleanUrl.split('?')[0].split('_')[0];
-    if (!cleanUrl.match(/\.(jpg|jpeg|png|webp|gif)$/i)) {
-        cleanUrl = cleanUrl + '.jpg';
-    }
+    cleanUrl = cleanUrl.split('?')[0];
     return cleanUrl;
 };
 
 // Parse sold/orders count
 const parseSoldCount = (text) => {
     if (!text) return null;
-    const match = text.match(/([\d,.]+)\+?\s*(sold|orders|pcs)?/i);
+    const match = String(text).match(/([\d,.]+)\+?\s*(sold|orders|pcs)?/i);
     if (match) {
         return parseInt(match[1].replace(/[,.\s]/g, ''), 10) || null;
     }
     return null;
 };
 
-// Extract price value and currency
-const extractPrice = (priceData) => {
-    if (!priceData) return { amount: null, currency: 'USD' };
-
-    let priceStr = null;
-    if (typeof priceData === 'string') {
-        priceStr = priceData;
-    } else if (priceData.formattedPrice) {
-        priceStr = priceData.formattedPrice;
-    } else if (priceData.minPrice) {
-        priceStr = String(priceData.minPrice);
-    }
-
-    if (!priceStr) return { amount: null, currency: 'USD' };
-
-    // Extract currency symbol
-    const currencyMatch = priceStr.match(/[$€£¥₹]/);
-    const currency = currencyMatch ?
-        ({ '$': 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY', '₹': 'INR' }[currencyMatch[0]] || 'USD') :
-        'USD';
-
-    return { amount: priceStr, currency };
+// Extract price from various formats
+const extractPriceValue = (priceData) => {
+    if (!priceData) return null;
+    if (typeof priceData === 'number') return String(priceData);
+    if (typeof priceData === 'string') return priceData;
+    if (priceData.formattedPrice) return priceData.formattedPrice;
+    if (priceData.minPrice) return String(priceData.minPrice);
+    if (priceData.value) return String(priceData.value);
+    return null;
 };
 
-// Extract products from page JSON data - FIXED with recursive search
-const extractProductsFromJson = (pageData) => {
+// Recursively find product array in JSON
+const findProductArray = (obj, depth = 0) => {
+    if (depth > 12 || !obj) return null;
+
+    if (Array.isArray(obj) && obj.length > 0) {
+        const firstItem = obj[0];
+        if (firstItem && (firstItem.productId || firstItem.itemId || firstItem.id || firstItem.item)) {
+            return obj;
+        }
+    }
+
+    if (typeof obj === 'object' && obj !== null) {
+        // Priority keys
+        const priorityKeys = ['itemList', 'items', 'products', 'list', 'mods', 'data', 'content'];
+        const allKeys = Object.keys(obj);
+        const sortedKeys = [...priorityKeys.filter(k => allKeys.includes(k)), ...allKeys.filter(k => !priorityKeys.includes(k))];
+
+        for (const key of sortedKeys) {
+            const result = findProductArray(obj[key], depth + 1);
+            if (result) return result;
+        }
+    }
+    return null;
+};
+
+// Extract products from JSON data
+const extractProductsFromJson = (jsonData) => {
     const products = [];
 
     try {
-        // Helper: Recursively find array of products
-        const findProductArray = (obj, depth = 0, path = '') => {
-            if (depth > 7 || !obj) return null;
-
-            // Check if this is a product array
-            if (Array.isArray(obj) && obj.length > 0) {
-                // Verify it contains product objects
-                const firstItem = obj[0];
-                if (firstItem && (firstItem.productId || firstItem.itemId || firstItem.id)) {
-                    log.info(`Found product array at depth ${depth}, path: ${path}, count: ${obj.length}`);
-                    return obj;
-                }
-            }
-
-            // Recursively check object properties
-            if (typeof obj === 'object' && obj !== null) {
-                for (const key in obj) {
-                    const result = findProductArray(obj[key], depth + 1, path ? `${path}.${key}` : key);
-                    if (result) return result;
-                }
-            }
-            return null;
-        };
-
-        const itemList = findProductArray(pageData);
-
-        if (!itemList) {
-            log.warning('Could not find product array in JSON structure');
-            log.debug(`JSON keys at root: ${Object.keys(pageData).join(', ')}`);
+        const itemList = findProductArray(jsonData);
+        if (!itemList || itemList.length === 0) {
+            log.warning('No product array found in JSON');
             return [];
         }
 
-        log.info(`Processing ${itemList.length} items from JSON`);
+        log.info(`Found ${itemList.length} items in JSON`);
 
         for (const item of itemList) {
-            // Skip if not a valid product
             if (!item) continue;
 
-            // Extract product ID
-            const productId = String(item.productId || item.itemId || item.id || '');
+            // Handle nested item structure
+            const data = item.item || item;
+
+            const productId = String(data.productId || data.itemId || data.id || '');
             if (!productId) continue;
 
-            // Extract title
-            const title =
-                item.title?.displayTitle ||
-                item.title?.seoTitle ||
-                item.title ||
-                item.productTitle ||
-                item.name ||
-                null;
+            // Title extraction
+            let title = null;
+            if (data.title) {
+                title = typeof data.title === 'object' ? (data.title.displayTitle || data.title.seoTitle) : data.title;
+            }
+            title = title || data.productTitle || data.name || null;
+            if (!title) continue;
 
-            if (!title) continue; // Skip if no title
-
-            // Extract prices
-            const priceInfo = extractPrice(
-                item.prices?.salePrice ||
-                item.salePrice ||
-                item.price ||
-                item.prices?.minPrice
+            // Price extraction
+            const price = extractPriceValue(
+                data.prices?.salePrice || data.salePrice || data.price || data.prices?.minPrice
+            );
+            const originalPrice = extractPriceValue(
+                data.prices?.originalPrice || data.oriPrice || data.originalPrice
             );
 
-            const originalPriceInfo = extractPrice(
-                item.prices?.originalPrice ||
-                item.oriPrice ||
-                item.originalPrice
-            );
+            // Rating & reviews
+            const rating = data.evaluation?.starRating || data.starRating || data.averageStar || data.rating || null;
+            const reviewsCount = data.evaluation?.totalCount || data.reviewCount || data.reviewsCount || null;
 
-            // Extract rating
-            const rating =
-                item.evaluation?.starRating ||
-                item.starRating ||
-                item.averageStar ||
-                item.rating ||
-                null;
-
-            // Extract review count
-            const reviews_count =
-                item.evaluation?.totalCount ||
-                item.evaluation?.reviewCount ||
-                item.reviewCount ||
-                item.reviewsCount ||
-                null;
-
-            // Extract orders/sold count
+            // Orders
             const orders = parseSoldCount(
-                item.trade?.tradeDesc ||
-                item.tradeDesc ||
-                item.salesCount ||
-                item.soldCount ||
-                item.sold
+                data.trade?.tradeDesc || data.tradeDesc || data.salesCount || data.soldCount || data.sold
             );
 
-            // Extract store info
-            const store_name =
-                item.store?.storeName ||
-                item.storeName ||
-                item.shopName ||
-                null;
+            // Store info
+            const storeName = data.store?.storeName || data.storeName || data.shopName || null;
+            let storeUrl = data.store?.storeUrl || null;
+            if (storeUrl && storeUrl.startsWith('//')) storeUrl = `https:${storeUrl}`;
+            if (!storeUrl && data.store?.storeId) storeUrl = `https://www.aliexpress.com/store/${data.store.storeId}`;
 
-            const store_url = item.store?.storeUrl
-                ? (item.store.storeUrl.startsWith('//') ? `https:${item.store.storeUrl}` : item.store.storeUrl)
-                : (item.store?.storeId ? `https://www.aliexpress.com/store/${item.store.storeId}` : null);
+            // Image
+            let imageUrl = data.image?.imgUrl || data.imageUrl || data.img || data.productImage || null;
+            imageUrl = normalizeImageUrl(imageUrl);
 
-            // Extract images
-            const image_url = normalizeImageUrl(
-                item.image?.imgUrl ||
-                item.imageUrl ||
-                item.img ||
-                item.productImage
-            );
+            // Product URL
+            let productUrl = data.productDetailUrl || null;
+            if (productUrl && productUrl.startsWith('//')) productUrl = `https:${productUrl}`;
+            if (!productUrl) productUrl = `https://www.aliexpress.com/item/${productId}.html`;
 
-            // Extract product URL
-            const product_url = item.productDetailUrl
-                ? (item.productDetailUrl.startsWith('//') ? `https:${item.productDetailUrl}` : item.productDetailUrl)
-                : (productId ? `https://www.aliexpress.com/item/${productId}.html` : null);
-
-            const product = {
+            products.push({
                 product_id: productId,
                 title,
-                price: priceInfo.amount,
-                original_price: originalPriceInfo.amount,
-                currency: priceInfo.currency,
+                price,
+                original_price: originalPrice,
+                currency: 'USD',
                 rating,
-                reviews_count,
+                reviews_count: reviewsCount,
                 orders,
-                store_name,
-                store_url,
-                image_url,
-                product_url,
-            };
-
-            products.push(product);
+                store_name: storeName,
+                store_url: storeUrl,
+                image_url: imageUrl,
+                product_url: productUrl,
+            });
         }
 
-        log.info(`Successfully extracted ${products.length} products from JSON`);
+        log.info(`Extracted ${products.length} products from JSON`);
     } catch (err) {
         log.error(`JSON extraction error: ${err.message}`);
-        log.debug(`Error stack: ${err.stack}`);
     }
 
     return products;
 };
 
-// Extract products from HTML with ACTUAL selectors from browser inspection
-const extractProductsFromHtml = ($) => {
+// Extract JSON-LD data
+const extractFromJsonLd = (htmlContent) => {
     const products = [];
-
     try {
-        // Use actual selector from browser inspection
-        const cards = $('.search-card-item').toArray();
-
-        log.debug(`Found ${cards.length} product cards in HTML`);
-
-        for (const card of cards) {
-            const $card = $(card);
-
-            // Extract link and ID
-            const $link = $card.find('a[href*="/item/"]').first();
-            let productUrl = $link.attr('href');
-
-            // Try to extract product ID from URL
-            let productId = null;
-            if (productUrl) {
-                const productIdMatch = productUrl.match(/\/item\/(\d+)\.html/);
-                productId = productIdMatch ? productIdMatch[1] : null;
-            }
-
-            // If no ID found from URL, try data attributes
-            if (!productId) {
-                productId = $card.attr('data-product-id') || $card.attr('data-id') || null;
-            }
-
-            // Skip if still no product ID
-            if (!productId) {
-                log.debug('Card found but no product ID extracted');
-                continue;
-            }
-
-            // Construct URL if missing
-            if (!productUrl) {
-                productUrl = `https://www.aliexpress.com/item/${productId}.html`;
-            }
-
-            // Extract title using flexible selector (classes are mangled)
-            const title =
-                $card.find('div[class*="titleText"]').first().text().trim() ||
-                $card.find('div[class*="title"]').first().text().trim() ||
-                $card.find('div[class*="Title"]').first().text().trim() ||
-                $card.find('a[class*="title"]').first().text().trim() ||
-                $card.find('h3, h2, h1').first().text().trim() ||
-                $card.find('span[class*="title"]').first().text().trim() ||
-                $link.attr('title') ||
-                $link.text().trim() ||
-                `Product ${productId}`; // Fallback to ID if no title found
-
-            // Extract prices using flexible selectors
-            const priceText =
-                $card.find('div[class*="price-sale"]').first().text().trim() ||
-                $card.find('div[class*="snow-price"]').first().text().trim() ||
-                $card.find('div[class*="Price"]').first().text().trim() ||
-                $card.find('.price').first().text().trim() ||
-                null;
-
-            const originalPriceText =
-                $card.find('div[class*="price-original"]').first().text().trim() ||
-                $card.find('div[class*="OriginalPrice"]').first().text().trim() ||
-                null;
-
-            // Extract rating using aria-label (most reliable)
-            const $ratingEl = $card.find('div[aria-label*="rating"]').first();
-            let rating = null;
-            if ($ratingEl.length) {
-                const ariaLabel = $ratingEl.attr('aria-label');
-                const ratingMatch = ariaLabel?.match(/([\d.]+)/);
-                rating = ratingMatch ? ratingMatch[1] : null;
-            }
-            // Fallback to class-based selectors
-            if (!rating) {
-                const ratingText = $card.find('div[class*="rating"], div[class*="star"]').first().text().trim();
-                const ratingMatch = ratingText?.match(/([\d.]+)/);
-                rating = ratingMatch ? ratingMatch[1] : null;
-            }
-
-            // Extract reviews count
-            const reviewText = $card.find('span[class*="review"], span[class*="Rating"]').first().text().trim();
-            const reviewMatch = reviewText?.match(/([\d,]+)/);
-            const reviews_count = reviewMatch ? parseInt(reviewMatch[1].replace(/,/g, ''), 10) : null;
-
-            // Extract orders/sold - look for text like "10,000+ sold"
-            const soldText = $card.text(); // Get all text in card
-            const soldMatch = soldText.match(/([\d,]+)\+?\s*(sold|orders)/i);
-            const orders = soldMatch ? parseInt(soldMatch[1].replace(/,/g, ''), 10) : null;
-
-            // Extract store info
-            const store_name =
-                $card.find('div[class*="store"], div[class*="Shop"], a[class*="store"]').first().text().trim() ||
-                null;
-
-            const store_url = $card.find('a[href*="/store/"]').first().attr('href') || null;
-
-            // Extract image
-            const imgSrc =
-                $card.find('img[src*="alicdn"]').first().attr('src') ||
-                $card.find('img[data-src]').first().attr('data-src') ||
-                $card.find('img').first().attr('src') ||
-                null;
-
-            const product = {
-                product_id: productId,
-                title,
-                price: priceText,
-                original_price: originalPriceText,
-                currency: 'USD', // Default, will be extracted from price text if available
-                rating,
-                reviews_count,
-                orders,
-                store_name,
-                store_url: store_url ? (store_url.startsWith('//') ? `https:${store_url}` : store_url) : null,
-                image_url: imgSrc ? normalizeImageUrl(imgSrc) : null,
-                product_url: productUrl.startsWith('//') ? `https:${productUrl}` : productUrl,
-            };
-
-            products.push(product);
+        const jsonLdMatches = htmlContent.matchAll(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi);
+        for (const match of jsonLdMatches) {
+            try {
+                const data = JSON.parse(match[1]);
+                if (data['@type'] === 'Product' || data['@type'] === 'ItemList') {
+                    const items = data.itemListElement || [data];
+                    for (const item of items) {
+                        const prod = item.item || item;
+                        if (prod.productID || prod.sku) {
+                            products.push({
+                                product_id: prod.productID || prod.sku,
+                                title: prod.name,
+                                price: prod.offers?.price || prod.offers?.lowPrice,
+                                original_price: null,
+                                currency: prod.offers?.priceCurrency || 'USD',
+                                rating: prod.aggregateRating?.ratingValue || null,
+                                reviews_count: prod.aggregateRating?.reviewCount || null,
+                                orders: null,
+                                store_name: prod.brand?.name || null,
+                                store_url: null,
+                                image_url: normalizeImageUrl(prod.image),
+                                product_url: prod.url,
+                            });
+                        }
+                    }
+                }
+            } catch (e) { /* Skip invalid JSON-LD */ }
         }
-
-        log.info(`Extracted ${products.length} products from HTML`);
     } catch (err) {
-        log.error(`HTML extraction error: ${err.message}`);
+        log.debug(`JSON-LD extraction failed: ${err.message}`);
     }
-
     return products;
 };
 
@@ -373,129 +227,148 @@ let saved = 0;
 const seenIds = new Set();
 const initial = startUrl ? [{ url: startUrl, userData: { pageNo: 1 } }] : [{ url: buildSearchUrl(keyword, 1), userData: { pageNo: 1 } }];
 
-const crawler = new CheerioCrawler({
+const crawler = new PlaywrightCrawler({
     proxyConfiguration,
-    maxRequestRetries: 3,
+    maxRequestRetries: 5,
     useSessionPool: true,
     sessionPoolOptions: {
-        maxPoolSize: 10,
-        sessionOptions: {
-            maxUsageCount: 10,
+        maxPoolSize: 5,
+        sessionOptions: { maxUsageCount: 3 },
+    },
+    maxConcurrency: 2, // Lower concurrency for cost
+    requestHandlerTimeoutSecs: 90,
+    navigationTimeoutSecs: 45,
+    browserPoolOptions: {
+        useFingerprints: true,
+        fingerprintOptions: {
+            fingerprintGeneratorOptions: {
+                browsers: ['firefox'],
+                operatingSystems: ['windows'],
+                devices: ['desktop'],
+            },
         },
     },
-    maxConcurrency: 5,
-    requestHandlerTimeoutSecs: 60,
-    // Add stealth headers to avoid blocking
     preNavigationHooks: [
-        async ({ request }) => {
-            request.headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-                'Sec-Ch-Ua-Mobile': '?0',
-                'Sec-Ch-Ua-Platform': '"Windows"',
-                'Cache-Control': 'max-age=0',
-            };
+        async ({ page }) => {
+            // Block heavy resources to reduce cost
+            await page.route('**/*', (route) => {
+                const type = route.request().resourceType();
+                const url = route.request().url();
+
+                // Block images, fonts, media, and tracking
+                if (['image', 'font', 'media', 'stylesheet'].includes(type) ||
+                    url.includes('google') || url.includes('facebook') ||
+                    url.includes('analytics') || url.includes('doubleclick') ||
+                    url.includes('.png') || url.includes('.jpg') || url.includes('.gif')) {
+                    return route.abort();
+                }
+                return route.continue();
+            });
+
+            // Stealth overrides
+            await page.addInitScript(() => {
+                Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            });
         },
     ],
-    async requestHandler({ $, request, crawler: crawlerInstance, body }) {
+    async requestHandler({ page, request, crawler: crawlerInstance }) {
         const pageNo = request.userData?.pageNo || 1;
         log.info(`Processing page ${pageNo}: ${request.url}`);
 
-        let products = [];
-        const htmlContent = body.toString();
+        // Wait for network to settle (minimal wait)
+        await page.waitForLoadState('domcontentloaded');
+        await page.waitForTimeout(3000);
 
-        // Log HTML size for debugging
-        log.debug(`Received HTML: ${htmlContent.length} bytes`);
+        // Get page content for JSON extraction
+        const htmlContent = await page.content();
+        log.info(`Page loaded: ${htmlContent.length} bytes`);
 
-        // Check if we're being blocked
-        if (htmlContent.includes('/_____tmd_____/punish') ||
-            htmlContent.includes('x5sec') ||
-            htmlContent.includes('captcha') ||
-            htmlContent.length < 10000) {
+        // Check for blocking
+        if (htmlContent.length < 10000 || htmlContent.includes('captcha') || htmlContent.includes('punish')) {
             log.warning(`Possible blocking detected. HTML length: ${htmlContent.length}`);
+            throw new Error('Blocked - will retry with new session');
         }
 
-        // Try to extract from embedded JSON first - IMPROVED EXTRACTION with DEBUG
-        try {
-            // Look for window._dida_config_
-            let match = htmlContent.match(/window\._dida_config_\s*=\s*({[\s\S]*?});/);
-            let varName = '_dida_config_';
+        let products = [];
 
-            if (!match) {
-                // Look for window.runParams
-                match = htmlContent.match(/window\.runParams\s*=\s*({[\s\S]*?});/);
-                varName = 'runParams';
+        // 1. Try window._dida_config_ (AliExpress primary data source)
+        const didaMatch = htmlContent.match(/window\._dida_config_\s*=\s*(\{[\s\S]*?\});/);
+        if (didaMatch) {
+            try {
+                const jsonData = JSON.parse(didaMatch[1]);
+                log.info('Found _dida_config_ data');
+                products = extractProductsFromJson(jsonData);
+            } catch (e) {
+                log.warning(`Failed to parse _dida_config_: ${e.message}`);
             }
-
-            if (!match) {
-                // Look for __INITIAL_STATE__
-                match = htmlContent.match(/__INITIAL_STATE__\s*=\s*({[\s\S]*?});/);
-                varName = '__INITIAL_STATE__';
-            }
-
-            if (match) {
-                try {
-                    const jsonData = JSON.parse(match[1]);
-                    log.info(`Found embedded JSON data in window.${varName}, extracting products...`);
-
-                    // DEBUG: Log JSON structure
-                    const keys = Object.keys(jsonData);
-                    log.info(`JSON root keys: ${keys.join(', ')}`);
-
-                    // If data key exists, log its keys too
-                    if (jsonData.data) {
-                        const dataKeys = Object.keys(jsonData.data);
-                        log.info(`JSON data keys (first 10): ${dataKeys.slice(0, 10).join(', ')}`);
-                    }
-
-                    products = extractProductsFromJson(jsonData);
-                    log.info(`Extracted ${products.length} products from JSON`);
-                } catch (parseErr) {
-                    log.warning(`Failed to parse JSON: ${parseErr.message}`);
-                }
-            } else {
-                log.warning('No JSON data found in page');
-            }
-        } catch (err) {
-            log.debug(`JSON extraction failed: ${err.message}`);
         }
 
-        // Fallback to HTML parsing if JSON fails
+        // 2. Try window.runParams
         if (products.length === 0) {
-            log.info('Falling back to HTML parsing...');
-            products = extractProductsFromHtml($);
-            log.info(`Extracted ${products.length} products from HTML`);
-
-            // Debug: log the first few product card structures
-            if (products.length === 0) {
-                const cardCount = $(
-                    '[class*="search-card-item"], ' +
-                    '[class*="list--gallery--"], ' +
-                    '[data-widget="item"], ' +
-                    '.product-item, ' +
-                    '[class*="CardWrapper"]'
-                ).length;
-                log.warning(`Found ${cardCount} potential product cards but extracted 0 products`);
-
-                // Log sample HTML structure for debugging
-                const sampleCard = $(
-                    '[class*="search-card-item"], ' +
-                    '[class*="list--gallery--"]'
-                ).first();
-                if (sampleCard.length) {
-                    log.debug(`Sample card classes: ${sampleCard.attr('class')}`);
+            const runParamsMatch = htmlContent.match(/window\.runParams\s*=\s*(\{[\s\S]*?\});/);
+            if (runParamsMatch) {
+                try {
+                    const jsonData = JSON.parse(runParamsMatch[1]);
+                    log.info('Found runParams data');
+                    products = extractProductsFromJson(jsonData);
+                } catch (e) {
+                    log.debug(`Failed to parse runParams: ${e.message}`);
                 }
             }
         }
+
+        // 3. Try __NEXT_DATA__
+        if (products.length === 0) {
+            const nextDataMatch = htmlContent.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+            if (nextDataMatch) {
+                try {
+                    const jsonData = JSON.parse(nextDataMatch[1]);
+                    log.info('Found __NEXT_DATA__');
+                    products = extractProductsFromJson(jsonData);
+                } catch (e) {
+                    log.debug(`Failed to parse __NEXT_DATA__: ${e.message}`);
+                }
+            }
+        }
+
+        // 4. Try __INITIAL_STATE__
+        if (products.length === 0) {
+            const initialStateMatch = htmlContent.match(/__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\});/);
+            if (initialStateMatch) {
+                try {
+                    const jsonData = JSON.parse(initialStateMatch[1]);
+                    log.info('Found __INITIAL_STATE__');
+                    products = extractProductsFromJson(jsonData);
+                } catch (e) {
+                    log.debug(`Failed to parse __INITIAL_STATE__: ${e.message}`);
+                }
+            }
+        }
+
+        // 5. Try JSON-LD
+        if (products.length === 0) {
+            products = extractFromJsonLd(htmlContent);
+            if (products.length > 0) {
+                log.info(`Found ${products.length} products from JSON-LD`);
+            }
+        }
+
+        // 6. Last resort: Extract from inline script data
+        if (products.length === 0) {
+            const scriptMatches = htmlContent.matchAll(/"itemList"\s*:\s*(\[[\s\S]*?\])/g);
+            for (const match of scriptMatches) {
+                try {
+                    const items = JSON.parse(match[1]);
+                    if (items.length > 0) {
+                        log.info(`Found itemList with ${items.length} items`);
+                        products = extractProductsFromJson({ itemList: items });
+                        break;
+                    }
+                } catch (e) { /* Skip */ }
+            }
+        }
+
+        log.info(`Total products found: ${products.length}`);
 
         // Save products
         const newProducts = [];
@@ -519,7 +392,6 @@ const crawler = new CheerioCrawler({
         if (saved < RESULTS_WANTED && products.length > 0) {
             const nextPage = pageNo + 1;
             const nextUrl = buildSearchUrl(keyword, nextPage);
-
             log.info(`Enqueueing page ${nextPage}...`);
             await crawlerInstance.addRequests([{
                 url: nextUrl,
@@ -534,8 +406,5 @@ const crawler = new CheerioCrawler({
 });
 
 await crawler.run(initial);
-
 log.info(`Scraping completed. Total products saved: ${saved}`);
-
-// Exit successfully
 await Actor.exit();
