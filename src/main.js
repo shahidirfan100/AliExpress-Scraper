@@ -113,33 +113,154 @@ const crawler = new PlaywrightCrawler({
         await page.waitForLoadState('domcontentloaded');
         await page.waitForTimeout(3000); // Let JS execute
 
-        // Extract products using exact JSON path via page.evaluate()
+        // Extract products using multiple JSON paths via page.evaluate()
         const result = await page.evaluate(() => {
             try {
-                // Exact path found during debugging
-                const products = window._dida_config_?._init_data_?.data?.data?.root?.fields?.mods?.itemList?.content;
+                // Try multiple possible paths for product data (AliExpress changes structure)
+                let products = null;
+
+                // Path 1: Original path
+                products = window._dida_config_?._init_data_?.data?.data?.root?.fields?.mods?.itemList?.content;
+
+                // Path 2: Alternative path structure
+                if (!products || !Array.isArray(products)) {
+                    products = window._dida_config_?._init_data_?.data?.root?.fields?.mods?.itemList?.content;
+                }
+
+                // Path 3: Another common structure
+                if (!products || !Array.isArray(products)) {
+                    products = window._dida_config_?._init_data_?.data?.data?.root?.mods?.itemList?.content;
+                }
+
+                // Path 4: Direct itemList access
+                if (!products || !Array.isArray(products)) {
+                    const initData = window._dida_config_?._init_data_;
+                    if (initData) {
+                        const searchDeep = (obj, key, depth = 0) => {
+                            if (depth > 8 || !obj || typeof obj !== 'object') return null;
+                            if (obj[key] && Array.isArray(obj[key])) return obj[key];
+                            if (obj.content && Array.isArray(obj.content)) return obj.content;
+                            for (const k of Object.keys(obj)) {
+                                const found = searchDeep(obj[k], key, depth + 1);
+                                if (found) return found;
+                            }
+                            return null;
+                        };
+                        products = searchDeep(initData, 'content');
+                    }
+                }
 
                 if (!products || !Array.isArray(products)) {
-                    return { error: 'Products not found at expected path', products: [] };
+                    return { error: 'Products not found at any known path', products: [], debug: Object.keys(window._dida_config_ || {}) };
                 }
 
                 return {
                     products: products.map(item => {
-                        const data = item.item || item;
+                        const data = item.item || item.productItem || item;
+
+                        // Extract rating from multiple possible locations
+                        const rating = data.evaluation?.starRating ||
+                            data.evaluation?.value ||
+                            data.trace?.starRating ||
+                            data.starRating ||
+                            data.averageStar ||
+                            data.rating ||
+                            null;
+
+                        // Extract review count from multiple locations - check trace object too
+                        const reviewCount = data.trace?.reviewCount ||
+                            data.trace?.review ||
+                            data.evaluation?.totalCount ||
+                            data.evaluation?.count ||
+                            data.evaluation?.totalValidNum ||
+                            data.reviewCount ||
+                            data.reviews ||
+                            data.totalReviews ||
+                            data.totalValidNum ||
+                            null;
+
+                        // Extract trade/orders from multiple locations
+                        const tradeDesc = data.trade?.tradeDesc ||
+                            data.trade?.value ||
+                            data.trace?.tradeDesc ||
+                            data.tradeDesc ||
+                            data.sold ||
+                            data.orders ||
+                            data.salesCount ||
+                            null;
+
+                        // Extract store info - check selling points and trace object
+                        const storeName = data.store?.storeName ||
+                            data.store?.name ||
+                            data.trace?.storeName ||
+                            data.sellingPoints?.storeName ||
+                            data.storeName ||
+                            data.sellerName ||
+                            data.seller?.name ||
+                            data.shopName ||
+                            null;
+
+                        // Extract storeId - check multiple locations including trace
+                        const storeId = data.store?.storeId ||
+                            data.store?.id ||
+                            data.trace?.storeId ||
+                            data.trace?.sellerId ||
+                            data.storeId ||
+                            data.sellerId ||
+                            data.seller?.id ||
+                            data.shopId ||
+                            null;
+
+                        // Extract store URL directly if available
+                        const storeUrl = data.store?.storeUrl ||
+                            data.store?.url ||
+                            data.storeUrl ||
+                            data.shopUrl ||
+                            null;
+
+                        // Extract price from multiple locations
+                        const salePrice = data.prices?.salePrice?.formattedPrice ||
+                            data.prices?.salePrice?.minPrice ||
+                            data.prices?.salePrice?.value ||
+                            data.salePrice?.formattedPrice ||
+                            data.price?.formattedPrice ||
+                            data.price?.value ||
+                            data.currentPrice ||
+                            data.price ||
+                            null;
+
+                        const originalPrice = data.prices?.originalPrice?.formattedPrice ||
+                            data.prices?.originalPrice?.value ||
+                            data.originalPrice?.formattedPrice ||
+                            data.originalPrice ||
+                            null;
+
+                        // Get product URL safely
+                        let productUrl = data.productDetailUrl || data.detailUrl || data.url || null;
+                        // Handle relative URLs
+                        if (productUrl && typeof productUrl === 'string') {
+                            productUrl = productUrl.trim();
+                            if (productUrl.startsWith('//')) {
+                                productUrl = 'https:' + productUrl;
+                            } else if (productUrl.startsWith('/')) {
+                                productUrl = 'https://www.aliexpress.com' + productUrl;
+                            }
+                        }
+
                         return {
-                            productId: String(data.productId || data.itemId || ''),
+                            productId: String(data.productId || data.itemId || data.id || ''),
                             title: data.title?.displayTitle || data.title?.seoTitle ||
-                                (typeof data.title === 'string' ? data.title : null),
-                            salePrice: data.prices?.salePrice?.formattedPrice ||
-                                data.prices?.salePrice?.minPrice || null,
-                            originalPrice: data.prices?.originalPrice?.formattedPrice || null,
-                            imageUrl: data.image?.imgUrl || null,
-                            rating: data.evaluation?.starRating || null,
-                            reviewCount: data.evaluation?.totalCount || null,
-                            tradeDesc: data.trade?.tradeDesc || null,
-                            storeName: data.store?.storeName || null,
-                            storeId: data.store?.storeId || null,
-                            productUrl: data.productDetailUrl || null,
+                                data.title?.text || (typeof data.title === 'string' ? data.title : null),
+                            salePrice: salePrice,
+                            originalPrice: originalPrice,
+                            imageUrl: data.image?.imgUrl || data.image?.url || data.imageUrl || data.img || null,
+                            rating: rating,
+                            reviewCount: reviewCount,
+                            tradeDesc: tradeDesc,
+                            storeName: storeName,
+                            storeId: storeId,
+                            storeUrl: storeUrl,
+                            productUrl: productUrl,
                         };
                     }),
                     count: products.length,
@@ -169,11 +290,23 @@ const crawler = new PlaywrightCrawler({
                 reviews_count: item.reviewCount,
                 orders: parseSoldCount(item.tradeDesc),
                 store_name: item.storeName,
-                store_url: item.storeId ? `https://www.aliexpress.com/store/${item.storeId}` : null,
+                store_url: item.storeUrl
+                    ? (item.storeUrl.startsWith('//') ? `https:${item.storeUrl}` : item.storeUrl)
+                    : (item.storeId ? `https://www.aliexpress.com/store/${item.storeId}` : null),
                 image_url: normalizeImageUrl(item.imageUrl),
-                product_url: item.productUrl
-                    ? (item.productUrl.startsWith('//') ? `https:${item.productUrl}` : item.productUrl)
-                    : `https://www.aliexpress.com/item/${item.productId}.html`,
+                product_url: (() => {
+                    try {
+                        if (!item.productUrl || typeof item.productUrl !== 'string') {
+                            return `https://www.aliexpress.com/item/${item.productId}.html`;
+                        }
+                        const url = item.productUrl.trim();
+                        // Validate URL by trying to construct it
+                        new URL(url.startsWith('http') ? url : `https://www.aliexpress.com${url.startsWith('/') ? '' : '/'}${url}`);
+                        return url.startsWith('http') ? url : `https://www.aliexpress.com${url.startsWith('/') ? '' : '/'}${url}`;
+                    } catch (e) {
+                        return `https://www.aliexpress.com/item/${item.productId}.html`;
+                    }
+                })(),
             });
         }
 
