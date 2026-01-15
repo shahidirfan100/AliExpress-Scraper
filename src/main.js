@@ -261,12 +261,44 @@ const crawler = new CheerioCrawler({
     },
     maxConcurrency: 5,
     requestHandlerTimeoutSecs: 60,
+    // Add stealth headers to avoid blocking
+    preNavigationHooks: [
+        async ({ request }) => {
+            request.headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                'Sec-Ch-Ua-Mobile': '?0',
+                'Sec-Ch-Ua-Platform': '"Windows"',
+                'Cache-Control': 'max-age=0',
+            };
+        },
+    ],
     async requestHandler({ $, request, crawler: crawlerInstance, body }) {
         const pageNo = request.userData?.pageNo || 1;
         log.info(`Processing page ${pageNo}: ${request.url}`);
 
         let products = [];
         const htmlContent = body.toString();
+
+        // Log HTML size for debugging
+        log.debug(`Received HTML: ${htmlContent.length} bytes`);
+
+        // Check if we're being blocked
+        if (htmlContent.includes('/_____tmd_____/punish') ||
+            htmlContent.includes('x5sec') ||
+            htmlContent.includes('captcha') ||
+            htmlContent.length < 10000) {
+            log.warning(`Possible blocking detected. HTML length: ${htmlContent.length}`);
+        }
 
         // Try to extract from embedded JSON first - IMPROVED EXTRACTION
         try {
@@ -292,6 +324,8 @@ const crawler = new CheerioCrawler({
                 } catch (parseErr) {
                     log.warning(`Failed to parse JSON: ${parseErr.message}`);
                 }
+            } else {
+                log.warning('No JSON data found in page');
             }
         } catch (err) {
             log.debug(`JSON extraction failed: ${err.message}`);
@@ -302,6 +336,27 @@ const crawler = new CheerioCrawler({
             log.info('Falling back to HTML parsing...');
             products = extractProductsFromHtml($);
             log.info(`Extracted ${products.length} products from HTML`);
+
+            // Debug: log the first few product card structures
+            if (products.length === 0) {
+                const cardCount = $(
+                    '[class*="search-card-item"], ' +
+                    '[class*="list--gallery--"], ' +
+                    '[data-widget="item"], ' +
+                    '.product-item, ' +
+                    '[class*="CardWrapper"]'
+                ).length;
+                log.warning(`Found ${cardCount} potential product cards but extracted 0 products`);
+
+                // Log sample HTML structure for debugging
+                const sampleCard = $(
+                    '[class*="search-card-item"], ' +
+                    '[class*="list--gallery--"]'
+                ).first();
+                if (sampleCard.length) {
+                    log.debug(`Sample card classes: ${sampleCard.attr('class')}`);
+                }
+            }
         }
 
         // Save products
