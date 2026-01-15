@@ -68,100 +68,163 @@ const extractPriceValue = (priceData) => {
     return null;
 };
 
-// Recursively find product array in JSON
-const findProductArray = (obj, depth = 0) => {
-    if (depth > 12 || !obj) return null;
+// Deep search for product arrays - more aggressive
+const findProductArrays = (obj, depth = 0, path = '') => {
+    const results = [];
+    if (depth > 15 || !obj) return results;
 
     if (Array.isArray(obj) && obj.length > 0) {
         const firstItem = obj[0];
-        if (firstItem && (firstItem.productId || firstItem.itemId || firstItem.id || firstItem.item)) {
-            return obj;
+        // Check for various product indicators
+        if (firstItem && typeof firstItem === 'object') {
+            const hasProductId = firstItem.productId || firstItem.itemId || firstItem.id;
+            const hasTitle = firstItem.title || firstItem.name || firstItem.subject;
+            const hasPrice = firstItem.price || firstItem.prices || firstItem.salePrice;
+
+            if (hasProductId || (hasTitle && hasPrice)) {
+                results.push({ path, items: obj });
+            }
         }
     }
 
-    if (typeof obj === 'object' && obj !== null) {
-        const priorityKeys = ['itemList', 'items', 'products', 'list', 'mods', 'data', 'content'];
-        const allKeys = Object.keys(obj);
-        const sortedKeys = [...priorityKeys.filter(k => allKeys.includes(k)), ...allKeys.filter(k => !priorityKeys.includes(k))];
-
-        for (const key of sortedKeys) {
-            const result = findProductArray(obj[key], depth + 1);
-            if (result) return result;
+    if (typeof obj === 'object' && obj !== null && !Array.isArray(obj)) {
+        for (const key of Object.keys(obj)) {
+            const newPath = path ? `${path}.${key}` : key;
+            const subResults = findProductArrays(obj[key], depth + 1, newPath);
+            results.push(...subResults);
         }
     }
-    return null;
+
+    return results;
+};
+
+// Extract products from a single item
+const extractProduct = (data) => {
+    // Handle nested item structure
+    const item = data.item || data;
+
+    const productId = String(
+        item.productId || item.itemId || item.id ||
+        item.offerId || item.product_id || ''
+    );
+    if (!productId) return null;
+
+    // Title extraction - handle various structures
+    let title = null;
+    if (item.title) {
+        if (typeof item.title === 'object') {
+            title = item.title.displayTitle || item.title.seoTitle || item.title.text;
+        } else {
+            title = item.title;
+        }
+    }
+    title = title || item.subject || item.productTitle || item.name || null;
+    if (!title) return null;
+
+    // Price extraction
+    const price = extractPriceValue(
+        item.prices?.salePrice || item.salePrice ||
+        item.price || item.prices?.minPrice ||
+        item.minPrice || item.currentPrice
+    );
+    const originalPrice = extractPriceValue(
+        item.prices?.originalPrice || item.oriPrice ||
+        item.originalPrice || item.maxPrice
+    );
+
+    // Rating & reviews
+    const rating =
+        item.evaluation?.starRating || item.starRating ||
+        item.averageStar || item.rating ||
+        item.averageStarRate || null;
+    const reviewsCount =
+        item.evaluation?.totalCount || item.reviewCount ||
+        item.reviewsCount || item.totalReviews || null;
+
+    // Orders/sold
+    const orders = parseSoldCount(
+        item.trade?.tradeDesc || item.tradeDesc ||
+        item.salesCount || item.soldCount ||
+        item.sold || item.orders
+    );
+
+    // Store info
+    const storeName =
+        item.store?.storeName || item.storeName ||
+        item.shopName || item.sellerName || null;
+    let storeUrl = item.store?.storeUrl || item.storeUrl || null;
+    if (storeUrl && storeUrl.startsWith('//')) storeUrl = `https:${storeUrl}`;
+    if (!storeUrl && (item.store?.storeId || item.storeId)) {
+        storeUrl = `https://www.aliexpress.com/store/${item.store?.storeId || item.storeId}`;
+    }
+
+    // Image
+    let imageUrl =
+        item.image?.imgUrl || item.imageUrl ||
+        item.img || item.productImage ||
+        item.image || item.picUrl || null;
+    if (typeof imageUrl === 'object') imageUrl = imageUrl.imgUrl || null;
+    imageUrl = normalizeImageUrl(imageUrl);
+
+    // Product URL
+    let productUrl = item.productDetailUrl || item.detailUrl || item.url || null;
+    if (productUrl && productUrl.startsWith('//')) productUrl = `https:${productUrl}`;
+    if (!productUrl) productUrl = `https://www.aliexpress.com/item/${productId}.html`;
+
+    return {
+        product_id: productId,
+        title: String(title).trim(),
+        price,
+        original_price: originalPrice,
+        currency: 'USD',
+        rating,
+        reviews_count: reviewsCount,
+        orders,
+        store_name: storeName,
+        store_url: storeUrl,
+        image_url: imageUrl,
+        product_url: productUrl,
+    };
 };
 
 // Extract products from JSON data
-const extractProductsFromJson = (jsonData) => {
+const extractProductsFromJson = (jsonData, sourceName = 'JSON') => {
     const products = [];
 
     try {
-        const itemList = findProductArray(jsonData);
-        if (!itemList || itemList.length === 0) {
-            log.warning('No product array found in JSON');
+        // Find all potential product arrays
+        const productArrays = findProductArrays(jsonData);
+
+        if (productArrays.length === 0) {
+            // Log top-level keys for debugging
+            const topKeys = Object.keys(jsonData).slice(0, 20);
+            log.info(`${sourceName} top-level keys: ${topKeys.join(', ')}`);
             return [];
         }
 
-        log.info(`Found ${itemList.length} items in JSON`);
+        log.info(`Found ${productArrays.length} potential product array(s)`);
 
-        for (const item of itemList) {
-            if (!item) continue;
+        // Use the largest array that yields valid products
+        let bestProducts = [];
+        for (const { path, items } of productArrays) {
+            log.debug(`Trying path: ${path} with ${items.length} items`);
 
-            const data = item.item || item;
-
-            const productId = String(data.productId || data.itemId || data.id || '');
-            if (!productId) continue;
-
-            let title = null;
-            if (data.title) {
-                title = typeof data.title === 'object' ? (data.title.displayTitle || data.title.seoTitle) : data.title;
+            const extracted = [];
+            for (const item of items) {
+                const product = extractProduct(item);
+                if (product) {
+                    extracted.push(product);
+                }
             }
-            title = title || data.productTitle || data.name || null;
-            if (!title) continue;
 
-            const price = extractPriceValue(
-                data.prices?.salePrice || data.salePrice || data.price || data.prices?.minPrice
-            );
-            const originalPrice = extractPriceValue(
-                data.prices?.originalPrice || data.oriPrice || data.originalPrice
-            );
-
-            const rating = data.evaluation?.starRating || data.starRating || data.averageStar || data.rating || null;
-            const reviewsCount = data.evaluation?.totalCount || data.reviewCount || data.reviewsCount || null;
-            const orders = parseSoldCount(
-                data.trade?.tradeDesc || data.tradeDesc || data.salesCount || data.soldCount || data.sold
-            );
-
-            const storeName = data.store?.storeName || data.storeName || data.shopName || null;
-            let storeUrl = data.store?.storeUrl || null;
-            if (storeUrl && storeUrl.startsWith('//')) storeUrl = `https:${storeUrl}`;
-            if (!storeUrl && data.store?.storeId) storeUrl = `https://www.aliexpress.com/store/${data.store.storeId}`;
-
-            let imageUrl = data.image?.imgUrl || data.imageUrl || data.img || data.productImage || null;
-            imageUrl = normalizeImageUrl(imageUrl);
-
-            let productUrl = data.productDetailUrl || null;
-            if (productUrl && productUrl.startsWith('//')) productUrl = `https:${productUrl}`;
-            if (!productUrl) productUrl = `https://www.aliexpress.com/item/${productId}.html`;
-
-            products.push({
-                product_id: productId,
-                title,
-                price,
-                original_price: originalPrice,
-                currency: 'USD',
-                rating,
-                reviews_count: reviewsCount,
-                orders,
-                store_name: storeName,
-                store_url: storeUrl,
-                image_url: imageUrl,
-                product_url: productUrl,
-            });
+            if (extracted.length > bestProducts.length) {
+                bestProducts = extracted;
+                log.info(`Best path so far: ${path} with ${extracted.length} products`);
+            }
         }
 
-        log.info(`Extracted ${products.length} products from JSON`);
+        products.push(...bestProducts);
+        log.info(`Extracted ${products.length} products from ${sourceName}`);
     } catch (err) {
         log.error(`JSON extraction error: ${err.message}`);
     }
@@ -181,9 +244,9 @@ const extractFromJsonLd = (htmlContent) => {
                     const items = data.itemListElement || [data];
                     for (const item of items) {
                         const prod = item.item || item;
-                        if (prod.productID || prod.sku) {
+                        if (prod.productID || prod.sku || prod.name) {
                             products.push({
-                                product_id: prod.productID || prod.sku,
+                                product_id: prod.productID || prod.sku || String(Math.random()),
                                 title: prod.name,
                                 price: prod.offers?.price || prod.offers?.lowPrice,
                                 original_price: null,
@@ -193,7 +256,7 @@ const extractFromJsonLd = (htmlContent) => {
                                 orders: null,
                                 store_name: prod.brand?.name || null,
                                 store_url: null,
-                                image_url: normalizeImageUrl(prod.image),
+                                image_url: normalizeImageUrl(typeof prod.image === 'string' ? prod.image : prod.image?.[0]),
                                 product_url: prod.url,
                             });
                         }
@@ -227,7 +290,7 @@ const crawler = new PlaywrightCrawler({
     },
     maxConcurrency: 2,
     requestHandlerTimeoutSecs: 120,
-    navigationTimeoutSecs: 90, // Increased timeout
+    navigationTimeoutSecs: 90,
     browserPoolOptions: {
         useFingerprints: true,
         fingerprintOptions: {
@@ -239,33 +302,25 @@ const crawler = new PlaywrightCrawler({
         },
     },
     preNavigationHooks: [
-        async ({ page, request }) => {
-            // Set extra headers
+        async ({ page }) => {
             await page.setExtraHTTPHeaders({
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             });
 
-            // Only block tracking/ads - NOT stylesheets or images (needed for page load)
             await page.route('**/*', (route) => {
                 const url = route.request().url();
-
-                // Only block tracking and ads
                 if (url.includes('google-analytics') ||
                     url.includes('googletagmanager') ||
                     url.includes('facebook.com') ||
-                    url.includes('doubleclick') ||
-                    url.includes('hotjar') ||
-                    url.includes('clarity.ms')) {
+                    url.includes('doubleclick')) {
                     return route.abort();
                 }
                 return route.continue();
             });
 
-            // Stealth overrides
             await page.addInitScript(() => {
                 Object.defineProperty(navigator, 'webdriver', { get: () => false });
-                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
             });
         },
     ],
@@ -273,20 +328,14 @@ const crawler = new PlaywrightCrawler({
         const pageNo = request.userData?.pageNo || 1;
         log.info(`Processing page ${pageNo}: ${request.url}`);
 
-        // Wait for page to be ready
         await page.waitForLoadState('domcontentloaded');
-
-        // Give time for JavaScript to execute
         await page.waitForTimeout(5000);
 
-        // Get page content for JSON extraction
         const htmlContent = await page.content();
         log.info(`Page loaded: ${htmlContent.length} bytes`);
 
-        // Check for blocking
         if (htmlContent.length < 5000 ||
             htmlContent.includes('/_____tmd_____/punish') ||
-            htmlContent.includes('x5sec') ||
             htmlContent.includes('robot check')) {
             log.warning(`Blocking detected. HTML length: ${htmlContent.length}`);
             throw new Error('Blocked - will retry with new session');
@@ -294,13 +343,13 @@ const crawler = new PlaywrightCrawler({
 
         let products = [];
 
-        // 1. Try window._dida_config_ (AliExpress primary data source)
-        const didaMatch = htmlContent.match(/window\._dida_config_\s*=\s*(\{[\s\S]*?\});/);
+        // 1. Try window._dida_config_
+        const didaMatch = htmlContent.match(/window\._dida_config_\s*=\s*(\{[\s\S]*?\});[\s\n]*(?:window\.|<\/script>)/);
         if (didaMatch) {
             try {
                 const jsonData = JSON.parse(didaMatch[1]);
                 log.info('Found _dida_config_ data');
-                products = extractProductsFromJson(jsonData);
+                products = extractProductsFromJson(jsonData, '_dida_config_');
             } catch (e) {
                 log.warning(`Failed to parse _dida_config_: ${e.message}`);
             }
@@ -313,7 +362,7 @@ const crawler = new PlaywrightCrawler({
                 try {
                     const jsonData = JSON.parse(runParamsMatch[1]);
                     log.info('Found runParams data');
-                    products = extractProductsFromJson(jsonData);
+                    products = extractProductsFromJson(jsonData, 'runParams');
                 } catch (e) {
                     log.debug(`Failed to parse runParams: ${e.message}`);
                 }
@@ -327,23 +376,28 @@ const crawler = new PlaywrightCrawler({
                 try {
                     const jsonData = JSON.parse(nextDataMatch[1]);
                     log.info('Found __NEXT_DATA__');
-                    products = extractProductsFromJson(jsonData);
+                    products = extractProductsFromJson(jsonData, '__NEXT_DATA__');
                 } catch (e) {
                     log.debug(`Failed to parse __NEXT_DATA__: ${e.message}`);
                 }
             }
         }
 
-        // 4. Try __INITIAL_STATE__
+        // 4. Try window._data_ or other common patterns
         if (products.length === 0) {
-            const initialStateMatch = htmlContent.match(/__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\});/);
-            if (initialStateMatch) {
-                try {
-                    const jsonData = JSON.parse(initialStateMatch[1]);
-                    log.info('Found __INITIAL_STATE__');
-                    products = extractProductsFromJson(jsonData);
-                } catch (e) {
-                    log.debug(`Failed to parse __INITIAL_STATE__: ${e.message}`);
+            const patterns = [
+                /window\._data_\s*=\s*(\{[\s\S]*?\});/,
+                /window\.pageData\s*=\s*(\{[\s\S]*?\});/,
+                /window\.__INITIAL_DATA__\s*=\s*(\{[\s\S]*?\});/,
+            ];
+            for (const pattern of patterns) {
+                const match = htmlContent.match(pattern);
+                if (match) {
+                    try {
+                        const jsonData = JSON.parse(match[1]);
+                        products = extractProductsFromJson(jsonData, 'alternateSource');
+                        if (products.length > 0) break;
+                    } catch (e) { /* Skip */ }
                 }
             }
         }
@@ -356,24 +410,78 @@ const crawler = new PlaywrightCrawler({
             }
         }
 
-        // 6. Look for any embedded product data
+        // 6. Try to extract from page via evaluate (DOM-based as last resort)
         if (products.length === 0) {
-            // Try to find itemList in any script
-            const allScripts = htmlContent.match(/<script[^>]*>([\s\S]*?)<\/script>/gi) || [];
-            for (const script of allScripts) {
-                if (script.includes('itemList') || script.includes('productId')) {
-                    const jsonMatch = script.match(/(\{[\s\S]*"itemList"[\s\S]*\})/);
-                    if (jsonMatch) {
-                        try {
-                            const jsonData = JSON.parse(jsonMatch[1]);
-                            products = extractProductsFromJson(jsonData);
-                            if (products.length > 0) {
-                                log.info(`Found products in inline script`);
-                                break;
-                            }
-                        } catch (e) { /* Skip */ }
-                    }
+            log.info('Trying DOM extraction as fallback...');
+            const domProducts = await page.evaluate(() => {
+                const products = [];
+
+                // Try to access window data directly
+                const w = window;
+                const sources = [
+                    w._dida_config_,
+                    w.runParams,
+                    w._data_,
+                    w.pageData,
+                ];
+
+                for (const source of sources) {
+                    if (!source) continue;
+
+                    // Stringify and search
+                    try {
+                        const str = JSON.stringify(source);
+                        if (str.includes('productId') || str.includes('itemId')) {
+                            return { raw: source, type: 'windowData' };
+                        }
+                    } catch (e) { /* Skip */ }
                 }
+
+                // Fallback: extract from visible cards
+                const cards = document.querySelectorAll('[class*="card-item"], [class*="product-card"], [class*="SearchProduct"]');
+                cards.forEach(card => {
+                    try {
+                        const link = card.querySelector('a[href*="/item/"]');
+                        if (!link) return;
+
+                        const href = link.href;
+                        const idMatch = href.match(/\/item\/(\d+)\.html/);
+                        if (!idMatch) return;
+
+                        const title = card.querySelector('[class*="title"], h3, h2')?.textContent?.trim();
+                        const price = card.querySelector('[class*="price"]')?.textContent?.trim();
+                        const img = card.querySelector('img')?.src;
+
+                        if (title) {
+                            products.push({
+                                product_id: idMatch[1],
+                                title,
+                                price,
+                                image_url: img,
+                                product_url: href,
+                            });
+                        }
+                    } catch (e) { /* Skip card */ }
+                });
+
+                return { products, type: 'dom' };
+            });
+
+            if (domProducts.type === 'windowData' && domProducts.raw) {
+                log.info('Got window data via evaluate, extracting...');
+                products = extractProductsFromJson(domProducts.raw, 'windowEval');
+            } else if (domProducts.products?.length > 0) {
+                log.info(`Extracted ${domProducts.products.length} products from DOM`);
+                products = domProducts.products.map(p => ({
+                    ...p,
+                    original_price: null,
+                    currency: 'USD',
+                    rating: null,
+                    reviews_count: null,
+                    orders: null,
+                    store_name: null,
+                    store_url: null,
+                }));
             }
         }
 
