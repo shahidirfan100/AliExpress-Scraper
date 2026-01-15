@@ -1,0 +1,77 @@
+{
+    "title": "AliExpress Product Scraper",
+    "description": "Extract product listings from AliExpress search results. Get product details including prices, ratings, seller info, and images.",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "startUrl": {
+            "title": "Start URL",
+            "type": "string",
+            "description": "Direct AliExpress search URL. If provided, overrides keyword search.",
+            "editor": "textfield"
+        },
+        "keyword": {
+            "title": "Search Keyword",
+            "type": "string",
+            "description": "Product search term (e.g., 'Towel', 'Phone Case', 'Wireless Earbuds').",
+            "editor": "textfield",
+            "prefill": "Towel"
+        },
+        "minPrice": {
+            "title": "Minimum Price",
+            "type": "number",
+            "description": "Filter products with price greater than or equal to this value.",
+            "editor": "number",
+            "minimum": 0
+        },
+        "maxPrice": {
+            "title": "Maximum Price",
+            "type": "number",
+            "description": "Filter products with price less than or equal to this value.",
+            "editor": "number",
+            "minimum": 0
+        },
+        "sortBy": {
+            "title": "Sort By",
+            "type": "string",
+            "description": "Sort order for search results.",
+            "editor": "select",
+            "enum": [
+                "default",
+                "price_asc",
+                "price_desc",
+                "orders"
+            ],
+            "enumTitles": [
+                "Best Match",
+                "Price: Low to High",
+                "Price: High to Low",
+                "Orders"
+            ],
+            "default": "default"
+        },
+        "results_wanted": {
+            "title": "Results Wanted",
+            "type": "integer",
+            "description": "Maximum number of products to collect.",
+            "minimum": 1,
+            "default": 20,
+            "prefill": 20,
+            "editor": "number"
+        },
+        "proxyConfiguration": {
+            "title": "Proxy Configuration",
+            "type": "object",
+            "description": "Proxy settings. Residential proxies recommended for AliExpress.",
+            "editor": "proxy",
+            "default": {
+                "useApifyProxy": true,
+                "apifyProxyGroups": [
+                    "RESIDENTIAL"
+                ]
+            }
+        }
+    },
+    "required": [],
+    "additionalProperties": false
+}

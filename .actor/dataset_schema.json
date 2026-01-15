@@ -1,0 +1,58 @@
+{
+    "actorSpecification": 1,
+    "fields": {},
+    "views": {
+        "overview": {
+            "title": "Overview",
+            "transformation": {
+                "fields": [
+                    "product_id",
+                    "title",
+                    "price",
+                    "original_price",
+                    "rating",
+                    "orders",
+                    "store_name",
+                    "product_url"
+                ]
+            },
+            "display": {
+                "component": "table",
+                "properties": {
+                    "product_id": {
+                        "label": "Product ID",
+                        "format": "text"
+                    },
+                    "title": {
+                        "label": "Title",
+                        "format": "text"
+                    },
+                    "price": {
+                        "label": "Price",
+                        "format": "text"
+                    },
+                    "original_price": {
+                        "label": "Original Price",
+                        "format": "text"
+                    },
+                    "rating": {
+                        "label": "Rating",
+                        "format": "text"
+                    },
+                    "orders": {
+                        "label": "Orders",
+                        "format": "text"
+                    },
+                    "store_name": {
+                        "label": "Store",
+                        "format": "text"
+                    },
+                    "product_url": {
+                        "label": "URL",
+                        "format": "link"
+                    }
+                }
+            }
+        }
+    }
+}
