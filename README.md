@@ -207,6 +207,29 @@ Download your data in multiple formats:
 
 ---
 
+## Important Data Notes
+
+> [!NOTE]
+> **AliExpress "Choice" Items**: The majority of products in AliExpress search results are now "Choice" items. These products are fulfilled through AliExpress's multi-seller network rather than individual stores. As a result, **store_name** and **reviews_count** fields are not available for Choice items in search result data—this is an AliExpress platform limitation, not a scraper limitation.
+
+**What data is always available:**
+- Product ID, title, price, original price, currency
+- Product image and URL
+- Star rating (1-5)
+- Orders/sold count
+
+**What data may be missing for Choice items:**
+- Store name (fulfilled by AliExpress network)
+- Review count (not exposed in search results)
+- Store URL (no single store for Choice items)
+
+**Full data available for:**
+- Sponsored/advertised products
+- Regular third-party seller listings
+- Non-Choice marketplace items
+
+---
+
 ## Frequently Asked Questions
 
 ### How many products can I scrape?

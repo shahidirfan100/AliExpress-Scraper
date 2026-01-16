@@ -157,6 +157,17 @@ const crawler = new PlaywrightCrawler({
                 return {
                     products: products.map(item => {
                         const data = item.item || item.productItem || item;
+                        const utLogMap = data.trace?.utLogMap || {};
+
+                        // Parse p4pExtendParam for sponsored/ad items (contains store info)
+                        let p4pData = {};
+                        try {
+                            if (data.custom?.p4pExtendParam) {
+                                p4pData = JSON.parse(data.custom.p4pExtendParam);
+                            }
+                        } catch (e) {
+                            p4pData = {};
+                        }
 
                         // Extract rating from multiple possible locations
                         const rating = data.evaluation?.starRating ||
@@ -167,15 +178,17 @@ const crawler = new PlaywrightCrawler({
                             data.rating ||
                             null;
 
-                        // Extract review count from multiple locations - check trace.utLogMap first (confirmed path)
-                        const reviewCount = data.trace?.utLogMap?.totalValidNum ||
-                            data.trace?.utLogMap?.review_count ||
-                            data.trace?.utLogMap?.ratingCount ||
-                            data.evaluation?.totalValidNum ||
+                        // Extract review count - check all locations including p4pData for ads
+                        // Note: AliExpress "Choice" items do NOT include review counts in search results
+                        const reviewCount = data.evaluation?.totalValidNum ||
+                            utLogMap.totalValidNum ||
+                            utLogMap.review_count ||
+                            utLogMap.ratingCount ||
+                            p4pData.totalValidNum ||
+                            p4pData.review_count ||
                             data.evaluation?.totalCount ||
                             data.evaluation?.count ||
                             data.trace?.reviewCount ||
-                            data.trace?.review ||
                             data.reviewCount ||
                             data.reviews ||
                             data.totalReviews ||
@@ -186,16 +199,20 @@ const crawler = new PlaywrightCrawler({
                         const tradeDesc = data.trade?.tradeDesc ||
                             data.trade?.value ||
                             data.trace?.tradeDesc ||
-                            data.trace?.utLogMap?.real_trade_count ||
+                            utLogMap.real_trade_count ||
+                            p4pData.real_trade_count ||
                             data.tradeDesc ||
                             data.sold ||
                             data.orders ||
                             data.salesCount ||
                             null;
 
-                        // Extract store info - check trace.utLogMap first (confirmed path)
-                        const storeName = data.trace?.utLogMap?.store_name ||
-                            data.trace?.utLogMap?.company_name ||
+                        // Extract store info - check p4pExtendParam first for ads, then utLogMap
+                        // Note: AliExpress "Choice" items do NOT include store names in search results
+                        const storeName = p4pData.store_name ||
+                            p4pData.company_name ||
+                            utLogMap.store_name ||
+                            utLogMap.company_name ||
                             data.store?.storeName ||
                             data.store?.name ||
                             data.trace?.storeName ||
@@ -206,9 +223,11 @@ const crawler = new PlaywrightCrawler({
                             data.shopName ||
                             null;
 
-                        // Extract storeId/sellerId - check trace.utLogMap first (confirmed path)
-                        const storeId = data.trace?.utLogMap?.seller_id ||
-                            data.trace?.utLogMap?.sellerId ||
+                        // Extract storeId/sellerId - check p4pData and utLogMap
+                        const storeId = p4pData.seller_id ||
+                            p4pData.sellerId ||
+                            utLogMap.seller_id ||
+                            utLogMap.sellerId ||
                             data.store?.storeId ||
                             data.store?.id ||
                             data.trace?.storeId ||
@@ -219,8 +238,9 @@ const crawler = new PlaywrightCrawler({
                             data.shopId ||
                             null;
 
-                        // Extract store URL - check trace.utLogMap and store object
-                        const storeUrl = data.store?.storeUrl ||
+                        // Extract store URL - check p4pData, store object
+                        const storeUrl = p4pData.storeUrl ||
+                            data.store?.storeUrl ||
                             data.store?.url ||
                             data.storeUrl ||
                             data.shopUrl ||
