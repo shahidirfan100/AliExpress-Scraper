@@ -1,182 +1,244 @@
-# 🛒 AliExpress Product Scraper
+# AliExpress Product Scraper
 
-Extract comprehensive product data from AliExpress search results. Get detailed information including prices, ratings, seller details, and images for market research, price monitoring, and competitive analysis.
+Scrape AliExpress product listings at scale. Extract prices, ratings, reviews, seller information, and more from the world's largest online marketplace. Perfect for market research, price monitoring, competitor analysis, and dropshipping product sourcing.
 
-## What Data Can You Extract?
+## Features
 
-This scraper collects the following product information from AliExpress:
+- **Keyword Search** — Search products using any keyword or phrase
+- **Direct URL Support** — Start from any AliExpress search results page
+- **Price Filtering** — Filter by minimum and maximum price range
+- **Sorting Options** — Sort by price, orders, or relevance
+- **Seller Information** — Get store names and direct store URLs
+- **Product Ratings** — Extract star ratings and review counts
+- **Sales Data** — See how many orders each product has received
+- **High Volume** — Collect hundreds or thousands of products per run
 
-| Field | Description |
-|-------|-------------|
-| **Product ID** | Unique AliExpress product identifier |
-| **Title** | Full product name and description |
-| **Price** | Current sale price |
-| **Original Price** | Price before discount |
-| **Currency** | Currency code (USD, EUR, etc.) |
-| **Rating** | Average star rating (1-5) |
-| **Reviews Count** | Total number of customer reviews |
-| **Orders** | Number of items sold |
-| **Store Name** | Seller's store name |
-| **Store URL** | Link to the seller's store |
-| **Image URL** | Main product image |
-| **Product URL** | Direct link to product page |
+## Use Cases
 
-## How to Use
+### E-commerce Research
+Discover trending products and analyze pricing strategies across categories. Identify best-selling items and understand market demand patterns.
 
-### Basic Usage
+### Price Monitoring
+Track competitor pricing in real-time. Monitor price fluctuations and discount patterns to optimize your own pricing strategy.
 
-Search for products using a keyword:
+### Dropshipping & Sourcing
+Find reliable suppliers by analyzing store ratings, order volumes, and customer reviews. Compare similar products across multiple sellers.
+
+### Competitive Analysis
+Benchmark your products against competitors. Analyze pricing, ratings, and sales performance across the marketplace.
+
+### Lead Generation
+Build targeted lists of suppliers and sellers for outreach campaigns. Filter by product category, price range, or sales volume.
+
+---
+
+## Input Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `keyword` | String | No | `"Towel"` | Search term to find products |
+| `startUrl` | String | No | — | Direct AliExpress search page URL |
+| `category` | String | No | — | Category ID to filter results |
+| `minPrice` | Number | No | — | Minimum product price |
+| `maxPrice` | Number | No | — | Maximum product price |
+| `sortBy` | String | No | `"default"` | Sort order: `default`, `price_asc`, `price_desc`, `orders` |
+| `results_wanted` | Integer | No | `20` | Maximum number of products to collect |
+| `proxyConfiguration` | Object | No | Residential | Proxy settings for requests |
+
+---
+
+## Output Data
+
+Each product in the dataset contains the following fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `product_id` | String | Unique AliExpress product identifier |
+| `title` | String | Full product title and description |
+| `price` | String | Current sale price with currency symbol |
+| `original_price` | String | Original price before discount |
+| `currency` | String | Currency code (USD, EUR, etc.) |
+| `rating` | Number | Average star rating (1.0 - 5.0) |
+| `reviews_count` | Number | Total number of customer reviews |
+| `orders` | Number | Number of items sold |
+| `store_name` | String | Name of the seller's store |
+| `store_url` | String | Direct URL to the seller's store page |
+| `image_url` | String | Main product image URL |
+| `product_url` | String | Direct link to product detail page |
+
+---
+
+## Usage Examples
+
+### Basic Keyword Search
+
+Search for products using a simple keyword:
 
 ```json
 {
-  "keyword": "wireless earbuds",
-  "results_wanted": 50
+    "keyword": "wireless earbuds",
+    "results_wanted": 50
 }
 ```
 
-### Advanced Filtering
+### Price Range Filter
 
-Apply price filters and sorting:
+Find products within a specific price range:
 
 ```json
 {
-  "keyword": "phone case",
-  "minPrice": 5,
-  "maxPrice": 20,
-  "sortBy": "orders",
-  "results_wanted": 100
+    "keyword": "phone case",
+    "minPrice": 5,
+    "maxPrice": 25,
+    "results_wanted": 100
+}
+```
+
+### Sort by Best Sellers
+
+Get the most popular products sorted by order count:
+
+```json
+{
+    "keyword": "laptop stand",
+    "sortBy": "orders",
+    "results_wanted": 200
 }
 ```
 
 ### Direct URL Input
 
-Start from a specific AliExpress search URL:
+Start from a specific search results page:
 
 ```json
 {
-  "startUrl": "https://www.aliexpress.com/w/wholesale-laptop-stand.html",
-  "results_wanted": 30
+    "startUrl": "https://www.aliexpress.com/w/wholesale-bluetooth-speaker.html",
+    "results_wanted": 150
 }
 ```
 
-## Input Configuration
+### Price Ascending Search
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `keyword` | String | No | `"Towel"` | Product search term |
-| `startUrl` | String | No | - | Direct AliExpress search URL |
-| `category` | String | No | - | Category filter |
-| `minPrice` | Number | No | - | Minimum price filter |
-| `maxPrice` | Number | No | - | Maximum price filter |
-| `sortBy` | Enum | No | `"default"` | Sort order: `default`, `price_asc`, `price_desc`, `orders` |
-| `results_wanted` | Integer | No | `20` | Maximum products to collect |
-| `proxyConfiguration` | Object | No | Residential | Proxy settings |
+Find the cheapest products first:
+
+```json
+{
+    "keyword": "USB cable",
+    "sortBy": "price_asc",
+    "maxPrice": 10,
+    "results_wanted": 50
+}
+```
+
+---
 
 ## Sample Output
 
 ```json
 {
-  "product_id": "1005006447212156",
-  "title": "Wireless Bluetooth Earbuds TWS Headphones",
-  "price": "$12.99",
-  "original_price": "$25.99",
-  "currency": "USD",
-  "rating": "4.7",
-  "reviews_count": 1250,
-  "orders": 5000,
-  "store_name": "Tech Store Official",
-  "store_url": "https://www.aliexpress.com/store/1102142044",
-  "image_url": "https://ae01.alicdn.com/kf/product-image.jpg",
-  "product_url": "https://www.aliexpress.com/item/1005006447212156.html"
+    "product_id": "1005006447212156",
+    "title": "Wireless Bluetooth Earbuds TWS Headphones Stereo Sound",
+    "price": "$12.99",
+    "original_price": "$25.99",
+    "currency": "USD",
+    "rating": 4.7,
+    "reviews_count": 2847,
+    "orders": 15420,
+    "store_name": "TechGadgets Official Store",
+    "store_url": "https://www.aliexpress.com/store/1102142044",
+    "image_url": "https://ae01.alicdn.com/kf/S1234567890abcdef.jpg",
+    "product_url": "https://www.aliexpress.com/item/1005006447212156.html"
 }
 ```
-
-## Tips for Best Results
-
-### Recommended Proxy Settings
-
-For optimal performance, use residential proxies:
-
-```json
-{
-  "proxyConfiguration": {
-    "useApifyProxy": true,
-    "apifyProxyGroups": ["RESIDENTIAL"]
-  }
-}
-```
-
-### Performance Optimization
-
-- Start with smaller `results_wanted` values (20-50) for testing
-- Use specific keywords for more relevant results
-- Apply price filters to narrow down the search
-- Sort by `orders` to find popular products
-
-## Use Cases
-
-### Market Research
-Analyze product trends, pricing strategies, and popular categories across the AliExpress marketplace.
-
-### Price Monitoring
-Track competitor pricing and discount patterns for informed business decisions.
-
-### Dropshipping Research
-Find reliable suppliers by analyzing store ratings, order counts, and customer reviews.
-
-### Product Sourcing
-Discover new product opportunities by exploring top-selling items in any category.
-
-### Competitive Analysis
-Compare product offerings, pricing, and seller ratings across similar items.
-
-## Cost Estimation
-
-The scraper uses browser automation for reliable data extraction. Estimated costs:
-
-| Products | Approximate Cost |
-|----------|------------------|
-| 20 | ~$0.10 |
-| 100 | ~$0.50 |
-| 500 | ~$2.50 |
-| 1000 | ~$5.00 |
-
-*Costs may vary based on proxy usage and retry attempts.*
-
-## Frequently Asked Questions
-
-### How often is the data updated?
-Each scrape fetches real-time data directly from AliExpress search results.
-
-### Can I scrape specific categories?
-Yes, use the `category` parameter or include the category in your search URL.
-
-### What if I get blocked?
-The scraper includes built-in stealth measures. For best results, use residential proxies and reasonable request intervals.
-
-### How many products can I scrape?
-There's no hard limit, but AliExpress search results are typically limited to 60 pages per query. Use different keywords or filters to expand your dataset.
-
-### Can I get product reviews?
-This scraper focuses on search results data. For detailed reviews, consider visiting individual product pages.
-
-## Integrations
-
-Export your data in multiple formats:
-
-- **JSON** - For programmatic access
-- **CSV** - For spreadsheet analysis
-- **Excel** - For business reporting
-- **API** - Direct integration with your systems
-
-Connect with your favorite tools through Apify integrations including Google Sheets, Airtable, Zapier, Make, and more.
-
-## Support
-
-- View the [Apify documentation](https://docs.apify.com/) for platform guidance
-- Check the [actor's issues page](https://console.apify.com/) for known issues
-- Contact support through the Apify Console for assistance
 
 ---
 
-Built for reliable AliExpress data extraction with enterprise-grade infrastructure.
+## Tips for Best Results
+
+### Optimize Your Search Keywords
+- Use specific, descriptive keywords for more relevant results
+- Include product type, brand names, or key features
+- Try variations of your search term to capture more products
+
+### Use Price Filters Effectively
+- Set realistic price ranges based on your target market
+- Combine price filters with sorting for better results
+- Use `price_asc` sorting to find budget-friendly options
+
+### Maximize Data Quality
+- Start with smaller batches (20-50) for testing
+- Use `orders` sorting to prioritize proven products
+- Filter by category when available for focused results
+
+### Proxy Configuration
+For optimal performance, residential proxies are recommended:
+
+```json
+{
+    "proxyConfiguration": {
+        "useApifyProxy": true,
+        "apifyProxyGroups": ["RESIDENTIAL"]
+    }
+}
+```
+
+---
+
+## Integrations
+
+Connect your scraped data with popular tools and platforms:
+
+- **Google Sheets** — Automatically sync products to spreadsheets
+- **Airtable** — Build product databases and catalogs
+- **Zapier** — Trigger workflows based on new products
+- **Make (Integromat)** — Create automated data pipelines
+- **Webhooks** — Send data to your custom endpoints
+- **Slack** — Get notifications for new products
+- **Email** — Receive automated reports
+
+### Export Formats
+
+Download your data in multiple formats:
+
+- **JSON** — For developers and API integrations
+- **CSV** — For spreadsheet analysis and Excel
+- **Excel** — For business reporting and presentations
+- **XML** — For legacy system integrations
+
+---
+
+## Frequently Asked Questions
+
+### How many products can I scrape?
+You can collect thousands of products per run. The practical limit depends on your search query and AliExpress search results availability (typically up to 60 pages per query).
+
+### How often is the data updated?
+Each run fetches real-time data directly from AliExpress. Schedule regular runs to keep your data fresh.
+
+### Can I search specific categories?
+Yes, use the `category` parameter with a category ID, or include category filters in your `startUrl`.
+
+### What if some fields are empty?
+Product listings vary in completeness. Some sellers may not display all information. The scraper extracts all available data for each product.
+
+### How do I get more products?
+Use different keyword variations, remove price filters, or set a higher `results_wanted` value. You can also run multiple searches with different parameters.
+
+### Can I scrape product reviews?
+This scraper focuses on search results data. For detailed product reviews, use dedicated review scraping solutions.
+
+---
+
+## Support & Resources
+
+- **[Apify Documentation](https://docs.apify.com/)** — Platform guides and tutorials
+- **[Apify Console](https://console.apify.com/)** — Manage runs and view results
+- **[API Reference](https://docs.apify.com/api/v2)** — Programmatic access documentation
+
+For issues or feature requests, contact support through the Apify Console.
+
+---
+
+## Legal & Compliance
+
+This actor is designed for legitimate data collection purposes. Users are responsible for ensuring their use complies with AliExpress terms of service and applicable laws. Always respect rate limits and use data responsibly.

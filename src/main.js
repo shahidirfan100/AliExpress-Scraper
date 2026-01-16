@@ -167,12 +167,15 @@ const crawler = new PlaywrightCrawler({
                             data.rating ||
                             null;
 
-                        // Extract review count from multiple locations - check trace object too
-                        const reviewCount = data.trace?.reviewCount ||
-                            data.trace?.review ||
+                        // Extract review count from multiple locations - check trace.utLogMap first (confirmed path)
+                        const reviewCount = data.trace?.utLogMap?.totalValidNum ||
+                            data.trace?.utLogMap?.review_count ||
+                            data.trace?.utLogMap?.ratingCount ||
+                            data.evaluation?.totalValidNum ||
                             data.evaluation?.totalCount ||
                             data.evaluation?.count ||
-                            data.evaluation?.totalValidNum ||
+                            data.trace?.reviewCount ||
+                            data.trace?.review ||
                             data.reviewCount ||
                             data.reviews ||
                             data.totalReviews ||
@@ -183,14 +186,17 @@ const crawler = new PlaywrightCrawler({
                         const tradeDesc = data.trade?.tradeDesc ||
                             data.trade?.value ||
                             data.trace?.tradeDesc ||
+                            data.trace?.utLogMap?.real_trade_count ||
                             data.tradeDesc ||
                             data.sold ||
                             data.orders ||
                             data.salesCount ||
                             null;
 
-                        // Extract store info - check selling points and trace object
-                        const storeName = data.store?.storeName ||
+                        // Extract store info - check trace.utLogMap first (confirmed path)
+                        const storeName = data.trace?.utLogMap?.store_name ||
+                            data.trace?.utLogMap?.company_name ||
+                            data.store?.storeName ||
                             data.store?.name ||
                             data.trace?.storeName ||
                             data.sellingPoints?.storeName ||
@@ -200,8 +206,10 @@ const crawler = new PlaywrightCrawler({
                             data.shopName ||
                             null;
 
-                        // Extract storeId - check multiple locations including trace
-                        const storeId = data.store?.storeId ||
+                        // Extract storeId/sellerId - check trace.utLogMap first (confirmed path)
+                        const storeId = data.trace?.utLogMap?.seller_id ||
+                            data.trace?.utLogMap?.sellerId ||
+                            data.store?.storeId ||
                             data.store?.id ||
                             data.trace?.storeId ||
                             data.trace?.sellerId ||
@@ -211,7 +219,7 @@ const crawler = new PlaywrightCrawler({
                             data.shopId ||
                             null;
 
-                        // Extract store URL directly if available
+                        // Extract store URL - check trace.utLogMap and store object
                         const storeUrl = data.store?.storeUrl ||
                             data.store?.url ||
                             data.storeUrl ||
